@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <title>WordCraft - Cloud Document Workspace</title>
+  <link data-trunk rel="icon" href="../../assets/app-icon/wordcraft.ico" />
+  <link data-trunk rel="rust" data-bin="wordcraft-web" data-wasm-opt="z" data-weak-refs />
+  <style>
+    :root {
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --bg-slate: #f8fafc;
+      --card-bg: #ffffff;
+      --border-color: #e2e8f0;
+      --text-dark: #0f172a;
+      --text-muted: #64748b;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: var(--bg-slate); color: var(--text-dark); }
+
+    /* View Containers */
+    .view-container { display: none; width: 100%; height: 100%; flex-direction: column; }
+    .view-container.active { display: flex; }
+
+    /* Auth Screen */
+    #auth-view { justify-content: center; align-items: center; background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); }
+    .auth-card { background: #ffffff; width: 100%; max-width: 400px; padding: 2rem; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.2); }
+    .auth-title { font-size: 1.5rem; font-weight: 700; margin-bottom: 0.5rem; color: #1e293b; text-align: center; }
+    .auth-subtitle { font-size: 0.875rem; color: var(--text-muted); text-align: center; margin-bottom: 1.5rem; }
+    .form-group { margin-bottom: 1rem; }
+    .form-group label { display: block; font-size: 0.875rem; font-weight: 500; margin-bottom: 0.25rem; color: #334155; }
+    .form-input { width: 100%; padding: 0.625rem; border: 1px solid var(--border-color); border-radius: 6px; font-size: 0.875rem; outline: none; }
+    .form-input:focus { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(37,99,235,0.2); }
+    .btn { display: inline-flex; align-items: center; justify-content: center; padding: 0.625rem 1.25rem; border-radius: 6px; font-size: 0.875rem; font-weight: 600; cursor: pointer; border: none; transition: all 0.2s; }
+    .btn-primary { background: var(--primary); color: white; width: 100%; }
+    .btn-primary:hover { background: var(--primary-hover); }
+    .btn-secondary { background: #e2e8f0; color: #334155; }
+    .btn-secondary:hover { background: #cbd5e1; }
+    .auth-toggle { text-align: center; margin-top: 1rem; font-size: 0.875rem; color: var(--text-muted); }
+    .auth-toggle a { color: var(--primary); text-decoration: none; font-weight: 600; cursor: pointer; }
+
+    /* Dashboard Header */
+    .header { background: #ffffff; border-bottom: 1px solid var(--border-color); padding: 0.75rem 1.5rem; display: flex; justify-content: space-between; align-items: center; }
+    .logo-group { display: flex; align-items: center; gap: 0.75rem; }
+    .logo-text { font-size: 1.25rem; font-weight: 700; color: #1e293b; }
+    .user-profile { display: flex; align-items: center; gap: 1rem; }
+
+    /* Dashboard Content */
+    .dashboard-body { padding: 2rem 1.5rem; max-width: 1200px; margin: 0 auto; width: 100%; flex: 1; overflow-y: auto; }
+    .action-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem; }
+    .doc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1.5rem; }
+    .doc-card { background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 10px; padding: 1.25rem; transition: transform 0.2s, box-shadow 0.2s; cursor: pointer; display: flex; flex-direction: column; justify-content: space-between; position: relative; }
+    .doc-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+    .doc-badge { align-self: flex-start; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; margin-bottom: 0.75rem; }
+    .badge-docx { background: #dbeafe; color: #1e40af; }
+    .badge-odt { background: #fef3c7; color: #92400e; }
+    .badge-md { background: #e0e7ff; color: #3730a3; }
+    .badge-pdf { background: #fee2e2; color: #991b1b; }
+    .doc-title { font-weight: 600; font-size: 1.05rem; margin-bottom: 0.5rem; color: #1e293b; word-break: break-word; }
+    .doc-meta { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 1rem; }
+    .doc-actions { display: flex; gap: 0.5rem; border-top: 1px solid #f1f5f9; padding-top: 0.75rem; justify-content: flex-end; }
+
+    /* Canvas / Editor View */
+    #editor-view { position: relative; width: 100%; height: 100%; }
+    .editor-top-bar { position: absolute; top: 0; left: 0; right: 0; height: 50px; background: #ffffff; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; justify-content: space-between; padding: 0 1rem; z-index: 10; }
+    .editor-title-input { font-size: 1rem; font-weight: 600; border: 1px solid transparent; padding: 0.25rem 0.5rem; border-radius: 4px; }
+    .editor-title-input:hover, .editor-title-input:focus { border-color: var(--border-color); background: #f8fafc; }
+    .editor-canvas-container { position: absolute; top: 50px; bottom: 0; left: 0; right: 0; }
+    #wordcraft_canvas { width: 100%; height: 100%; display: block; }
+    #wordcraft_loading { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(255,255,255,0.8); color: #555; font: 14px system-ui, sans-serif; pointer-events: none; z-index: 5; }
+
+    /* Modal */
+    .modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 100; justify-content: center; align-items: center; }
+    .modal.active { display: flex; }
+    .modal-content { background: white; border-radius: 8px; padding: 1.5rem; width: 100%; max-width: 450px; }
+  </style>
+</head>
+<body>
+
+  <!-- Auth View -->
+  <div id="auth-view" class="view-container active">
+    <div class="auth-card">
+      <div class="auth-title">WordCraft Workspace</div>
+      <div class="auth-subtitle">Sign in to manage and edit your documents</div>
+      <div id="auth-error" style="color: #dc2626; font-size: 0.85rem; margin-bottom: 1rem; display: none;"></div>
+      <form id="auth-form" onsubmit="handleAuthSubmit(event)">
+        <div class="form-group">
+          <label>Username</label>
+          <input type="text" id="auth-username" class="form-input" required />
+        </div>
+        <div class="form-group">
+          <label>Password</label>
+          <input type="password" id="auth-password" class="form-input" required />
+        </div>
+        <button type="submit" id="auth-submit-btn" class="btn btn-primary">Sign In</button>
+      </form>
+      <div class="auth-toggle">
+        <span id="auth-toggle-text">Don't have an account?</span>
+        <a id="auth-toggle-link" onclick="toggleAuthMode()">Register</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Dashboard View -->
+  <div id="dashboard-view" class="view-container">
+    <div class="header">
+      <div class="logo-group">
+        <div class="logo-text">WordCraft</div>
+      </div>
+      <div class="user-profile">
+        <span id="user-display" style="font-weight: 500;">User</span>
+        <button class="btn btn-secondary" onclick="logout()" style="padding: 0.4rem 0.8rem;">Logout</button>
+      </div>
+    </div>
+
+    <div class="dashboard-body">
+      <div class="action-bar">
+        <div>
+          <h2 style="margin: 0; font-size: 1.5rem;">Document Workspace</h2>
+          <div style="font-size: 0.875rem; color: var(--text-muted);">Create, open, edit and sync document files</div>
+        </div>
+        <div style="display: flex; gap: 0.5rem;">
+          <button class="btn btn-primary" onclick="openCreateModal()">+ New Document</button>
+          <button class="btn btn-secondary" onclick="openUploadModal()">Upload File</button>
+        </div>
+      </div>
+
+      <div id="documents-grid" class="doc-grid">
+        <!-- Document cards rendered dynamically -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Editor View -->
+  <div id="editor-view" class="view-container">
+    <div class="editor-top-bar">
+      <div style="display: flex; align-items: center; gap: 0.75rem;">
+        <button class="btn btn-secondary" onclick="closeEditor()" style="padding: 0.3rem 0.6rem;">&larr; Back to Dashboard</button>
+        <input type="text" id="editor-doc-title" class="editor-title-input" value="Untitled Document" onchange="updateDocTitle(this.value)" />
+      </div>
+      <div style="display: flex; gap: 0.5rem;">
+        <button class="btn btn-secondary" onclick="downloadCurrentDoc()" style="padding: 0.4rem 0.8rem;">Download</button>
+        <button class="btn btn-primary" onclick="saveDocToServer()" style="padding: 0.4rem 0.8rem;">Save to Cloud</button>
+      </div>
+    </div>
+    <div class="editor-canvas-container">
+      <canvas id="wordcraft_canvas"></canvas>
+      <div id="wordcraft_loading">Loading WordCraft WASM Engine&hellip;</div>
+    </div>
+  </div>
+
+  <!-- Create Modal -->
+  <div id="create-modal" class="modal">
+    <div class="modal-content">
+      <h3 style="margin-top:0;">Create New Document</h3>
+      <div class="form-group">
+        <label>Document Title</label>
+        <input type="text" id="new-doc-title" class="form-input" placeholder="e.g. Project Proposal" />
+      </div>
+      <div class="form-group">
+        <label>Format</label>
+        <select id="new-doc-format" class="form-input">
+          <option value="docx">Microsoft Word (.docx)</option>
+          <option value="odt">OpenDocument Text (.odt)</option>
+          <option value="md">Markdown (.md)</option>
+        </select>
+      </div>
+      <div style="display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1.5rem;">
+        <button class="btn btn-secondary" onclick="closeCreateModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="createDocument()">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Upload Modal -->
+  <div id="upload-modal" class="modal">
+    <div class="modal-content">
+      <h3 style="margin-top:0;">Upload Existing File</h3>
+      <div class="form-group">
+        <label>Select File (.docx, .odt, .md, .pdf)</label>
+        <input type="file" id="upload-file-input" class="form-input" accept=".docx,.odt,.md,.pdf" />
+      </div>
+      <div style="display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1.5rem;">
+        <button class="btn btn-secondary" onclick="closeUploadModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="uploadDocument()">Upload</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let isRegisterMode = false;
+    let authToken = localStorage.getItem('wordcraft_token') || null;
+    let currentUsername = localStorage.getItem('wordcraft_username') || null;
+    let currentDocId = null;
+    let currentDocInfo = null;
+    let currentDocBytes = null;
+
+    window.addEventListener('DOMContentLoaded', () => {
+      if (authToken) {
+        checkAuthAndLoadDashboard();
+      } else {
+        switchView('auth-view');
+      }
+    });
+
+    function switchView(viewId) {
+      document.querySelectorAll('.view-container').forEach(v => v.classList.remove('active'));
+      document.getElementById(viewId).classList.add('active');
+    }
+
+    function toggleAuthMode() {
+      isRegisterMode = !isRegisterMode;
+      document.querySelector('.auth-title').innerText = isRegisterMode ? 'Create Account' : 'WordCraft Workspace';
+      document.getElementById('auth-submit-btn').innerText = isRegisterMode ? 'Register' : 'Sign In';
+      document.getElementById('auth-toggle-text').innerText = isRegisterMode ? 'Already have an account?' : "Don't have an account?";
+      document.getElementById('auth-toggle-link').innerText = isRegisterMode ? 'Sign In' : 'Register';
+    }
+
+    async function handleAuthSubmit(e) {
+      e.preventDefault();
+      const u = document.getElementById('auth-username').value;
+      const p = document.getElementById('auth-password').value;
+      const errDiv = document.getElementById('auth-error');
+      errDiv.style.display = 'none';
+
+      try {
+        if (isRegisterMode) {
+          const res = await fetch('/api/auth/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: u, password: p })
+          });
+          if (!res.ok) {
+            const data = await res.json();
+            throw new Error(data.detail || 'Registration failed');
+          }
+          isRegisterMode = false;
+          toggleAuthMode();
+          alert('Registration successful! Please sign in.');
+          return;
+        }
+
+        const formData = new URLSearchParams();
+        formData.append('username', u);
+        formData.append('password', p);
+
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: formData
+        });
+
+        if (!res.ok) {
+          const data = await res.json();
+          throw new Error(data.detail || 'Login failed');
+        }
+
+        const data = await res.json();
+        authToken = data.access_token;
+        currentUsername = data.username;
+        localStorage.setItem('wordcraft_token', authToken);
+        localStorage.setItem('wordcraft_username', currentUsername);
+
+        checkAuthAndLoadDashboard();
+      } catch (err) {
+        errDiv.innerText = err.message;
+        errDiv.style.display = 'block';
+      }
+    }
+
+    async function checkAuthAndLoadDashboard() {
+      try {
+        const res = await fetch('/api/auth/me', {
+          headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        if (!res.ok) throw new Error('Token expired');
+
+        document.getElementById('user-display').innerText = currentUsername;
+        switchView('dashboard-view');
+        loadDocuments();
+      } catch (err) {
+        logout();
+      }
+    }
+
+    function logout() {
+      authToken = null;
+      currentUsername = null;
+      localStorage.removeItem('wordcraft_token');
+      localStorage.removeItem('wordcraft_username');
+      switchView('auth-view');
+    }
+
+    async function loadDocuments() {
+      const grid = document.getElementById('documents-grid');
+      grid.innerHTML = '<div style="grid-column: 1/-1; text-align: center; color: var(--text-muted);">Loading documents...</div>';
+
+      try {
+        const res = await fetch('/api/documents', {
+          headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        const docs = await res.json();
+
+        if (docs.length === 0) {
+          grid.innerHTML = '<div style="grid-column: 1/-1; text-align: center; color: var(--text-muted); padding: 3rem 0;">No documents found. Create or upload one to get started!</div>';
+          return;
+        }
+
+        grid.innerHTML = docs.map(d => `
+          <div class="doc-card" onclick="openDocInEditor('${d.id}')">
+            <div>
+              <span class="doc-badge badge-${d.format}">${d.format}</span>
+              <div class="doc-title">${escapeHtml(d.title)}</div>
+              <div class="doc-meta">Owner: ${d.owner_username} | Size: ${(d.size_bytes / 1024).toFixed(1)} KB</div>
+            </div>
+            <div class="doc-actions" onclick="event.stopPropagation()">
+              <button class="btn btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;" onclick="downloadDoc('${d.id}', '${escapeHtml(d.title)}.${d.format}')">Download</button>
+              <button class="btn btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; color: #dc2626;" onclick="deleteDoc('${d.id}')">Delete</button>
+            </div>
+          </div>
+        `).join('');
+      } catch (err) {
+        grid.innerHTML = '<div style="grid-column: 1/-1; text-align: center; color: #dc2626;">Error loading documents.</div>';
+      }
+    }
+
+    function openCreateModal() { document.getElementById('create-modal').classList.add('active'); }
+    function closeCreateModal() { document.getElementById('create-modal').classList.remove('active'); }
+    function openUploadModal() { document.getElementById('upload-modal').classList.add('active'); }
+    function closeUploadModal() { document.getElementById('upload-modal').classList.remove('active'); }
+
+    async function createDocument() {
+      const title = document.getElementById('new-doc-title').value || 'Untitled Document';
+      const format = document.getElementById('new-doc-format').value;
+
+      const fd = new FormData();
+      fd.append('title', title);
+      fd.append('format', format);
+
+      const res = await fetch('/api/documents', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${authToken}` },
+        body: fd
+      });
+
+      if (res.ok) {
+        closeCreateModal();
+        loadDocuments();
+      } else {
+        alert('Failed to create document');
+      }
+    }
+
+    async function uploadDocument() {
+      const fileInput = document.getElementById('upload-file-input');
+      if (!fileInput.files.length) return alert('Select a file');
+
+      const file = fileInput.files[0];
+      const ext = file.name.split('.').pop().toLowerCase();
+      const title = file.name.substring(0, file.name.lastIndexOf('.')) || file.name;
+
+      const fd = new FormData();
+      fd.append('title', title);
+      fd.append('format', ext);
+      fd.append('file', file);
+
+      const res = await fetch('/api/documents', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${authToken}` },
+        body: fd
+      });
+
+      if (res.ok) {
+        closeUploadModal();
+        loadDocuments();
+      } else {
+        alert('Failed to upload document');
+      }
+    }
+
+    async function openDocInEditor(docId) {
+      currentDocId = docId;
+      try {
+        const res = await fetch(`/api/documents/${docId}`, {
+          headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        currentDocInfo = await res.json();
+        document.getElementById('editor-doc-title').value = currentDocInfo.title;
+
+        // Fetch actual document blob from backend
+        const downloadRes = await fetch(`/api/documents/${docId}/download`, {
+          headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        if (downloadRes.ok) {
+          const blob = await downloadRes.blob();
+          currentDocBytes = new Uint8Array(await blob.arrayBuffer());
+          // Pass file bytes to WASM window instance if exported/initialized
+          if (window.wordcraft_load_document) {
+            window.wordcraft_load_document(currentDocBytes, currentDocInfo.format);
+          }
+        }
+
+        switchView('editor-view');
+      } catch (e) {
+        alert('Failed to load document info');
+      }
+    }
+
+    function closeEditor() {
+      switchView('dashboard-view');
+      loadDocuments();
+    }
+
+    async function updateDocTitle(newTitle) {
+      if (!currentDocId) return;
+      const fd = new FormData();
+      fd.append('title', newTitle);
+      await fetch(`/api/documents/${currentDocId}`, {
+        method: 'PUT',
+        headers: { 'Authorization': `Bearer ${authToken}` },
+        body: fd
+      });
+    }
+
+    function downloadDoc(docId, filename) {
+      window.open(`/api/documents/${docId}/download?token=${authToken}`, '_blank');
+    }
+
+    function downloadCurrentDoc() {
+      if (currentDocId && currentDocInfo) {
+        downloadDoc(currentDocId, `${currentDocInfo.title}.${currentDocInfo.format}`);
+      }
+    }
+
+    async function saveDocToServer() {
+      if (!currentDocId || !currentDocInfo) return;
+
+      try {
+        let exportBytes = currentDocBytes;
+        if (window.wordcraft_export_document) {
+          exportBytes = window.wordcraft_export_document();
+        }
+
+        if (exportBytes) {
+          const blob = new Blob([exportBytes], { type: 'application/octet-stream' });
+          const file = new File([blob], `${currentDocInfo.title}.${currentDocInfo.format}`);
+
+          const fd = new FormData();
+          fd.append('file', file);
+          fd.append('title', currentDocInfo.title);
+
+          const res = await fetch(`/api/documents/${currentDocId}`, {
+            method: 'PUT',
+            headers: { 'Authorization': `Bearer ${authToken}` },
+            body: fd
+          });
+
+          if (res.ok) {
+            alert('Document saved to server successfully!');
+            return;
+          }
+        }
+        alert('Saved document metadata to cloud.');
+      } catch (err) {
+        alert('Error saving document: ' + err.message);
+      }
+    }
+
+    async function deleteDoc(docId) {
+      if (!confirm('Are you sure you want to delete this document?')) return;
+      await fetch(`/api/documents/${docId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${authToken}` });
+      loadDocuments();
+    }
+
+    function escapeHtml(str) {
+      return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    }
+  </script>
+</body>
+</html>
