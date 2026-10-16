@@ -1,0 +1,52 @@
+services:
+  wordcraft-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: wordcraft-web
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-80}:80"
+    depends_on:
+      - wordcraft-backend
+    networks:
+      - wordcraft-net
+
+  wordcraft-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: wordcraft-backend
+    restart: unless-stopped
+    environment:
+      - JWT_SECRET=${JWT_SECRET:-super-secret-wordcraft-key-change-in-production}
+      - DATABASE_PATH=/data/db/wordcraft.db
+      - STORAGE_DIR=/data/documents
+    volumes:
+      - wordcraft-db:/data/db
+      - wordcraft-docs:/data/documents
+    networks:
+      - wordcraft-net
+
+  # Optional MCP & Automated Conversion Service Profile
+  wordcraft-mcp:
+    profiles: ["mcp"]
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp
+    container_name: wordcraft-mcp
+    restart: "no"
+    volumes:
+      - wordcraft-docs:/data/documents
+    networks:
+      - wordcraft-net
+
+networks:
+  wordcraft-net:
+    driver: bridge
+
+volumes:
+  wordcraft-db:
+    name: wordcraft-db-data
+  wordcraft-docs:
+    name: wordcraft-doc-storage
