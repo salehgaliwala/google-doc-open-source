@@ -58,6 +58,11 @@
     .badge-odt { background: #fef3c7; color: #92400e; }
     .badge-md { background: #e0e7ff; color: #3730a3; }
     .badge-pdf { background: #fee2e2; color: #991b1b; }
+    .share-badge { font-size: 0.7rem; padding: 0.15rem 0.4rem; border-radius: 4px; font-weight: 600; margin-left: 0.5rem; }
+    .share-private { background: #f1f5f9; color: #475569; }
+    .share-link { background: #e0f2fe; color: #0369a1; }
+    .share-public { background: #dcfce7; color: #15803d; }
+
     .doc-title { font-weight: 600; font-size: 1.05rem; margin-bottom: 0.5rem; color: #1e293b; word-break: break-word; }
     .doc-meta { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 1rem; }
     .doc-actions { display: flex; gap: 0.5rem; border-top: 1px solid #f1f5f9; padding-top: 0.75rem; justify-content: flex-end; }
@@ -119,7 +124,7 @@
       <div class="action-bar">
         <div>
           <h2 style="margin: 0; font-size: 1.5rem;">Document Workspace</h2>
-          <div style="font-size: 0.875rem; color: var(--text-muted);">Create, open, edit and sync document files</div>
+          <div style="font-size: 0.875rem; color: var(--text-muted);">Create, open, edit, share and sync document files</div>
         </div>
         <div style="display: flex; gap: 0.5rem;">
           <button class="btn btn-primary" onclick="openCreateModal()">+ New Document</button>
@@ -140,7 +145,13 @@
         <button class="btn btn-secondary" onclick="closeEditor()" style="padding: 0.3rem 0.6rem;">&larr; Back to Dashboard</button>
         <input type="text" id="editor-doc-title" class="editor-title-input" value="Untitled Document" onchange="updateDocTitle(this.value)" />
       </div>
-      <div style="display: flex; gap: 0.5rem;">
+      <div style="display: flex; gap: 0.5rem; align-items: center;">
+        <select id="editor-share-mode" class="form-input" style="padding: 0.3rem; font-size: 0.8rem; width: auto;" onchange="updateDocShareMode(this.value)">
+          <option value="private">Private</option>
+          <option value="link">Anyone with Link</option>
+          <option value="public">Public</option>
+        </select>
+        <button class="btn btn-secondary" onclick="copyShareLink()" style="padding: 0.4rem 0.8rem;">Copy Link</button>
         <button class="btn btn-secondary" onclick="downloadCurrentDoc()" style="padding: 0.4rem 0.8rem;">Download</button>
         <button class="btn btn-primary" onclick="saveDocToServer()" style="padding: 0.4rem 0.8rem;">Save to Cloud</button>
       </div>
@@ -167,6 +178,14 @@
           <option value="md">Markdown (.md)</option>
         </select>
       </div>
+      <div class="form-group">
+        <label>Sharing Access</label>
+        <select id="new-doc-share" class="form-input">
+          <option value="private">Private (Only Me)</option>
+          <option value="link">Anyone with Link</option>
+          <option value="public">Public</option>
+        </select>
+      </div>
       <div style="display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1.5rem;">
         <button class="btn btn-secondary" onclick="closeCreateModal()">Cancel</button>
         <button class="btn btn-primary" onclick="createDocument()">Create</button>
@@ -181,6 +200,14 @@
       <div class="form-group">
         <label>Select File (.docx, .odt, .md, .pdf)</label>
         <input type="file" id="upload-file-input" class="form-input" accept=".docx,.odt,.md,.pdf" />
+      </div>
+      <div class="form-group">
+        <label>Sharing Access</label>
+        <select id="upload-doc-share" class="form-input">
+          <option value="private">Private (Only Me)</option>
+          <option value="link">Anyone with Link</option>
+          <option value="public">Public</option>
+        </select>
       </div>
       <div style="display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1.5rem;">
         <button class="btn btn-secondary" onclick="closeUploadModal()">Cancel</button>
@@ -198,6 +225,14 @@
     let currentDocBytes = null;
 
     window.addEventListener('DOMContentLoaded', () => {
+      const urlParams = new URLSearchParams(window.location.search);
+      const sharedDocId = urlParams.get('doc');
+
+      if (sharedDocId) {
+        openDocInEditor(sharedDocId);
+        return;
+      }
+
       if (authToken) {
         checkAuthAndLoadDashboard();
       } else {
@@ -299,7 +334,7 @@
 
       try {
         const res = await fetch('/api/documents', {
-          headers: { 'Authorization': `Bearer ${authToken}` }
+          headers: authToken ? { 'Authorization': `Bearer ${authToken}` } : {}
         });
         const docs = await res.json();
 
@@ -312,12 +347,14 @@
           <div class="doc-card" onclick="openDocInEditor('${d.id}')">
             <div>
               <span class="doc-badge badge-${d.format}">${d.format}</span>
+              <span class="share-badge share-${d.share_mode}">${d.share_mode}</span>
               <div class="doc-title">${escapeHtml(d.title)}</div>
               <div class="doc-meta">Owner: ${d.owner_username} | Size: ${(d.size_bytes / 1024).toFixed(1)} KB</div>
             </div>
             <div class="doc-actions" onclick="event.stopPropagation()">
+              <button class="btn btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;" onclick="copyDocLink('${d.id}')">Share Link</button>
               <button class="btn btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;" onclick="downloadDoc('${d.id}', '${escapeHtml(d.title)}.${d.format}')">Download</button>
-              <button class="btn btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; color: #dc2626;" onclick="deleteDoc('${d.id}')">Delete</button>
+              ${authToken && d.owner_username === currentUsername ? `<button class="btn btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; color: #dc2626;" onclick="deleteDoc('${d.id}')">Delete</button>` : ''}
             </div>
           </div>
         `).join('');
@@ -334,10 +371,12 @@
     async function createDocument() {
       const title = document.getElementById('new-doc-title').value || 'Untitled Document';
       const format = document.getElementById('new-doc-format').value;
+      const shareMode = document.getElementById('new-doc-share').value;
 
       const fd = new FormData();
       fd.append('title', title);
       fd.append('format', format);
+      fd.append('share_mode', shareMode);
 
       const res = await fetch('/api/documents', {
         method: 'POST',
@@ -360,10 +399,12 @@
       const file = fileInput.files[0];
       const ext = file.name.split('.').pop().toLowerCase();
       const title = file.name.substring(0, file.name.lastIndexOf('.')) || file.name;
+      const shareMode = document.getElementById('upload-doc-share').value;
 
       const fd = new FormData();
       fd.append('title', title);
       fd.append('format', ext);
+      fd.append('share_mode', shareMode);
       fd.append('file', file);
 
       const res = await fetch('/api/documents', {
@@ -383,20 +424,19 @@
     async function openDocInEditor(docId) {
       currentDocId = docId;
       try {
-        const res = await fetch(`/api/documents/${docId}`, {
-          headers: { 'Authorization': `Bearer ${authToken}` }
-        });
+        const headers = authToken ? { 'Authorization': `Bearer ${authToken}` } : {};
+        const res = await fetch(`/api/documents/${docId}`, { headers });
+        if (!res.ok) throw new Error('Access denied or document not found');
+
         currentDocInfo = await res.json();
         document.getElementById('editor-doc-title').value = currentDocInfo.title;
+        document.getElementById('editor-share-mode').value = currentDocInfo.share_mode;
 
-        // Fetch actual document blob from backend
-        const downloadRes = await fetch(`/api/documents/${docId}/download`, {
-          headers: { 'Authorization': `Bearer ${authToken}` }
-        });
+        // Fetch document file blob
+        const downloadRes = await fetch(`/api/documents/${docId}/download`, { headers });
         if (downloadRes.ok) {
           const blob = await downloadRes.blob();
           currentDocBytes = new Uint8Array(await blob.arrayBuffer());
-          // Pass file bytes to WASM window instance if exported/initialized
           if (window.wordcraft_load_document) {
             window.wordcraft_load_document(currentDocBytes, currentDocInfo.format);
           }
@@ -404,17 +444,23 @@
 
         switchView('editor-view');
       } catch (e) {
-        alert('Failed to load document info');
+        alert('Failed to load document: ' + e.message);
+        if (!authToken) switchView('auth-view');
       }
     }
 
     function closeEditor() {
-      switchView('dashboard-view');
-      loadDocuments();
+      history.pushState(null, '', window.location.pathname);
+      if (authToken) {
+        switchView('dashboard-view');
+        loadDocuments();
+      } else {
+        switchView('auth-view');
+      }
     }
 
     async function updateDocTitle(newTitle) {
-      if (!currentDocId) return;
+      if (!currentDocId || !authToken) return;
       const fd = new FormData();
       fd.append('title', newTitle);
       await fetch(`/api/documents/${currentDocId}`, {
@@ -424,8 +470,33 @@
       });
     }
 
+    async function updateDocShareMode(shareMode) {
+      if (!currentDocId || !authToken) return;
+      const fd = new FormData();
+      fd.append('share_mode', shareMode);
+      await fetch(`/api/documents/${currentDocId}`, {
+        method: 'PUT',
+        headers: { 'Authorization': `Bearer ${authToken}` },
+        body: fd
+      });
+      alert(`Sharing updated to ${shareMode}`);
+    }
+
+    function copyDocLink(docId) {
+      const shareUrl = `${window.location.origin}/?doc=${docId}`;
+      navigator.clipboard.writeText(shareUrl);
+      alert('Share link copied to clipboard: ' + shareUrl);
+    }
+
+    function copyShareLink() {
+      if (currentDocId) {
+        copyDocLink(currentDocId);
+      }
+    }
+
     function downloadDoc(docId, filename) {
-      window.open(`/api/documents/${docId}/download?token=${authToken}`, '_blank');
+      const url = authToken ? `/api/documents/${docId}/download?token=${authToken}` : `/api/documents/${docId}/download`;
+      window.open(url, '_blank');
     }
 
     function downloadCurrentDoc() {
@@ -436,6 +507,7 @@
 
     async function saveDocToServer() {
       if (!currentDocId || !currentDocInfo) return;
+      if (!authToken) return alert('Sign in required to save changes');
 
       try {
         let exportBytes = currentDocBytes;
@@ -472,7 +544,8 @@
       if (!confirm('Are you sure you want to delete this document?')) return;
       await fetch(`/api/documents/${docId}`, {
         method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${authToken}` });
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
       loadDocuments();
     }
 

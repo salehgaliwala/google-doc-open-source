@@ -32,11 +32,18 @@ def init_db():
         filename TEXT NOT NULL,
         size_bytes INTEGER NOT NULL,
         is_public INTEGER DEFAULT 0,
+        share_mode TEXT DEFAULT 'private', -- 'private', 'link', 'public'
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
     );
     """)
+
+    # Migration check for existing DBs
+    try:
+        cursor.execute("ALTER TABLE documents ADD COLUMN share_mode TEXT DEFAULT 'private'")
+    except Exception:
+        pass
 
     conn.commit()
     conn.close()

@@ -23,9 +23,9 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7 # 7 days
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
 
-app = FastAPI(title="WordCraft Document Workspace API", version="1.0.0")
+app = FastAPI(title="WordCraft Document Workspace API", version="1.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -55,7 +55,7 @@ class Token(BaseModel):
 
 class DocUpdate(BaseModel):
     title: Optional[str] = None
-    is_public: Optional[bool] = None
+    share_mode: Optional[str] = None # 'private', 'link', 'public'
 
 class DocResponse(BaseModel):
     id: str
@@ -64,6 +64,7 @@ class DocResponse(BaseModel):
     filename: str
     size_bytes: int
     is_public: bool
+    share_mode: str
     created_at: str
     updated_at: str
     owner_username: str
@@ -81,26 +82,31 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-def get_current_user(token: str = Depends(oauth2_scheme), conn: sqlite3.Connection = Depends(get_db)):
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+def get_current_user(token: Optional[str] = Depends(oauth2_scheme), conn: sqlite3.Connection = Depends(get_db)):
+    if not token:
+        return None
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub")
         if username is None:
-            raise credentials_exception
+            return None
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, username FROM users WHERE username = ?", (username,))
+        user = cursor.fetchone()
+        if user is None:
+            return None
+        return {"id": user["id"], "username": user["username"]}
     except jwt.PyJWTError:
-        raise credentials_exception
+        return None
 
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, username FROM users WHERE username = ?", (username,))
-    user = cursor.fetchone()
-    if user is None:
-        raise credentials_exception
-    return {"id": user["id"], "username": user["username"]}
+def require_current_user(current_user: Optional[dict] = Depends(get_current_user)):
+    if not current_user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return current_user
 
 def generate_minimal_docx() -> bytes:
     buffer = io.BytesIO()
@@ -139,18 +145,18 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), conn: sqlite3.Connec
     return {"access_token": access_token, "token_type": "bearer", "username": user["username"]}
 
 @app.get("/api/auth/me", response_model=UserResponse)
-def me(current_user: dict = Depends(get_current_user)):
+def me(current_user: dict = Depends(require_current_user)):
     return current_user
 
 # Document endpoints
 @app.get("/api/documents", response_model=List[DocResponse])
-def list_documents(current_user: dict = Depends(get_current_user), conn: sqlite3.Connection = Depends(get_db)):
+def list_documents(current_user: dict = Depends(require_current_user), conn: sqlite3.Connection = Depends(get_db)):
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT d.id, d.title, d.format, d.filename, d.size_bytes, d.is_public, d.created_at, d.updated_at, u.username as owner_username
+        SELECT d.id, d.title, d.format, d.filename, d.size_bytes, d.is_public, COALESCE(d.share_mode, 'private') as share_mode, d.created_at, d.updated_at, u.username as owner_username
         FROM documents d
         JOIN users u ON d.user_id = u.id
-        WHERE d.user_id = ? OR d.is_public = 1
+        WHERE d.user_id = ? OR d.share_mode = 'public' OR d.is_public = 1
         ORDER BY d.updated_at DESC
     """, (current_user["id"],))
     rows = cursor.fetchall()
@@ -161,7 +167,8 @@ def list_documents(current_user: dict = Depends(get_current_user), conn: sqlite3
             format=r["format"],
             filename=r["filename"],
             size_bytes=r["size_bytes"],
-            is_public=bool(r["is_public"]),
+            is_public=bool(r["is_public"] or r["share_mode"] == 'public'),
+            share_mode=r["share_mode"],
             created_at=str(r["created_at"]),
             updated_at=str(r["updated_at"]),
             owner_username=r["owner_username"]
@@ -172,8 +179,9 @@ def list_documents(current_user: dict = Depends(get_current_user), conn: sqlite3
 async def create_or_upload_document(
     title: str = Form(...),
     format: str = Form("docx"), # docx, odt, md, pdf
+    share_mode: str = Form("private"), # private, link, public
     file: Optional[UploadFile] = File(None),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_current_user),
     conn: sqlite3.Connection = Depends(get_db)
 ):
     doc_id = str(uuid.uuid4())
@@ -200,10 +208,13 @@ async def create_or_upload_document(
 
     cursor = conn.cursor()
     now_str = datetime.utcnow().isoformat()
+    smode = share_mode.lower() if share_mode.lower() in ["private", "link", "public"] else "private"
+    is_pub = 1 if smode == "public" else 0
+
     cursor.execute("""
-        INSERT INTO documents (id, user_id, title, format, filename, size_bytes, is_public, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
-    """, (doc_id, current_user["id"], title, fmt, filename, size_bytes, now_str, now_str))
+        INSERT INTO documents (id, user_id, title, format, filename, size_bytes, is_public, share_mode, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (doc_id, current_user["id"], title, fmt, filename, size_bytes, is_pub, smode, now_str, now_str))
     conn.commit()
 
     return {
@@ -212,17 +223,18 @@ async def create_or_upload_document(
         "format": fmt,
         "filename": filename,
         "size_bytes": size_bytes,
-        "is_public": False,
+        "is_public": bool(is_pub),
+        "share_mode": smode,
         "created_at": now_str,
         "updated_at": now_str,
         "owner_username": current_user["username"]
     }
 
 @app.get("/api/documents/{doc_id}")
-def get_document_info(doc_id: str, current_user: dict = Depends(get_current_user), conn: sqlite3.Connection = Depends(get_db)):
+def get_document_info(doc_id: str, current_user: Optional[dict] = Depends(get_current_user), conn: sqlite3.Connection = Depends(get_db)):
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT d.id, d.user_id, d.title, d.format, d.filename, d.size_bytes, d.is_public, d.created_at, d.updated_at, u.username as owner_username
+        SELECT d.id, d.user_id, d.title, d.format, d.filename, d.size_bytes, d.is_public, COALESCE(d.share_mode, 'private') as share_mode, d.created_at, d.updated_at, u.username as owner_username
         FROM documents d
         JOIN users u ON d.user_id = u.id
         WHERE d.id = ?
@@ -230,8 +242,12 @@ def get_document_info(doc_id: str, current_user: dict = Depends(get_current_user
     r = cursor.fetchone()
     if not r:
         raise HTTPException(status_code=404, detail="Document not found")
-    if r["user_id"] != current_user["id"] and not r["is_public"]:
-        raise HTTPException(status_code=403, detail="Access denied")
+
+    smode = r["share_mode"]
+    # Access control: Owner, or public, or shared via link
+    if smode == "private":
+        if not current_user or current_user["id"] != r["user_id"]:
+            raise HTTPException(status_code=403, detail="Access denied")
 
     return DocResponse(
         id=r["id"],
@@ -239,34 +255,35 @@ def get_document_info(doc_id: str, current_user: dict = Depends(get_current_user
         format=r["format"],
         filename=r["filename"],
         size_bytes=r["size_bytes"],
-        is_public=bool(r["is_public"]),
+        is_public=bool(r["is_public"] or smode == "public"),
+        share_mode=smode,
         created_at=str(r["created_at"]),
         updated_at=str(r["updated_at"]),
         owner_username=r["owner_username"]
     )
 
 @app.get("/api/documents/{doc_id}/download")
-def download_document(doc_id: str, token: Optional[str] = None, current_user: Optional[dict] = None, conn: sqlite3.Connection = Depends(get_db)):
-    if not current_user:
-        if token:
-            try:
-                payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-                username = payload.get("sub")
-                cursor = conn.cursor()
-                cursor.execute("SELECT id, username FROM users WHERE username = ?", (username,))
-                u = cursor.fetchone()
-                if u:
-                    current_user = {"id": u["id"], "username": u["username"]}
-            except Exception:
-                pass
+def download_document(doc_id: str, token: Optional[str] = None, current_user: Optional[dict] = Depends(get_current_user), conn: sqlite3.Connection = Depends(get_db)):
+    if not current_user and token:
+        try:
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            username = payload.get("sub")
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, username FROM users WHERE username = ?", (username,))
+            u = cursor.fetchone()
+            if u:
+                current_user = {"id": u["id"], "username": u["username"]}
+        except Exception:
+            pass
 
     cursor = conn.cursor()
-    cursor.execute("SELECT id, user_id, title, format, filename, is_public FROM documents WHERE id = ?", (doc_id,))
+    cursor.execute("SELECT id, user_id, title, format, filename, is_public, COALESCE(share_mode, 'private') as share_mode FROM documents WHERE id = ?", (doc_id,))
     r = cursor.fetchone()
     if not r:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    if not r["is_public"]:
+    smode = r["share_mode"]
+    if smode == "private":
         if not current_user or current_user["id"] != r["user_id"]:
             raise HTTPException(status_code=403, detail="Access denied")
 
@@ -282,13 +299,13 @@ def download_document(doc_id: str, token: Optional[str] = None, current_user: Op
 async def update_document(
     doc_id: str,
     title: Optional[str] = Form(None),
-    is_public: Optional[bool] = Form(None),
+    share_mode: Optional[str] = Form(None),
     file: Optional[UploadFile] = File(None),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_current_user),
     conn: sqlite3.Connection = Depends(get_db)
 ):
     cursor = conn.cursor()
-    cursor.execute("SELECT id, user_id, title, format, filename, size_bytes, is_public FROM documents WHERE id = ?", (doc_id,))
+    cursor.execute("SELECT id, user_id, title, format, filename, size_bytes, is_public, COALESCE(share_mode, 'private') as share_mode FROM documents WHERE id = ?", (doc_id,))
     r = cursor.fetchone()
     if not r:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -296,7 +313,8 @@ async def update_document(
         raise HTTPException(status_code=403, detail="Access denied")
 
     new_title = title if title is not None else r["title"]
-    new_is_public = int(is_public) if is_public is not None else r["is_public"]
+    new_smode = share_mode.lower() if share_mode and share_mode.lower() in ["private", "link", "public"] else r["share_mode"]
+    new_is_public = 1 if new_smode == "public" else 0
     new_size = r["size_bytes"]
 
     if file:
@@ -309,9 +327,9 @@ async def update_document(
     now_str = datetime.utcnow().isoformat()
     cursor.execute("""
         UPDATE documents
-        SET title = ?, is_public = ?, size_bytes = ?, updated_at = ?
+        SET title = ?, is_public = ?, share_mode = ?, size_bytes = ?, updated_at = ?
         WHERE id = ?
-    """, (new_title, new_is_public, new_size, now_str, doc_id))
+    """, (new_title, new_is_public, new_smode, new_size, now_str, doc_id))
     conn.commit()
 
     return {
@@ -321,11 +339,12 @@ async def update_document(
         "filename": r["filename"],
         "size_bytes": new_size,
         "is_public": bool(new_is_public),
+        "share_mode": new_smode,
         "updated_at": now_str
     }
 
 @app.delete("/api/documents/{doc_id}")
-def delete_document(doc_id: str, current_user: dict = Depends(get_current_user), conn: sqlite3.Connection = Depends(get_db)):
+def delete_document(doc_id: str, current_user: dict = Depends(require_current_user), conn: sqlite3.Connection = Depends(get_db)):
     cursor = conn.cursor()
     cursor.execute("SELECT id, user_id, filename FROM documents WHERE id = ?", (doc_id,))
     r = cursor.fetchone()
